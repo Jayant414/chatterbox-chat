@@ -7,7 +7,6 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. FREE CLOUD DATABASE CONFIGURATION (ZERO-SETUP NO SLEEP) ---
-# This saves your data securely to an online cloud database instead of a local file
 CLOUD_DB_URL = "https://kvdb.io/Jc9p8M7b6V5c4X3z2A1q/chatterbox_data"
 
 def load_global_db_from_cloud():
@@ -22,7 +21,7 @@ def load_global_db_from_cloud():
         response = requests.get(CLOUD_DB_URL, timeout=5)
         if response.status_code == 200:
             data = response.json()
-            # Ensure essential structures exist
+            # Ensure essential structures exist safely
             if "users" not in data: data["users"] = default_db["users"]
             if "group_memberships" not in data: data["group_memberships"] = default_db["group_memberships"]
             if "group_creators" not in data: data["group_creators"] = default_db["group_creators"]
@@ -168,7 +167,7 @@ else:
                         if st.session_state.dont_remind_group_delete:
                             if group_name in db["group_memberships"]: del db["group_memberships"][group_name]
                             if group_name in db["group_creators"]: del db["group_creators"][group_name]
-                            if group_name in db["messages"]: del db["messages"][group_name]
+                            if "messages" in db and group_name in db["messages"]: del db["messages"][group_name]
                             save_global_db_to_cloud(db)
                             st.session_state.active_group = "Global Chat" if "Global Chat" in available_groups else None
                             st.rerun()
@@ -191,6 +190,10 @@ else:
                     if new_group_title != "Global Chat" and new_group_title not in db["group_memberships"]:
                         parsed_members = [email.strip() for email in member_emails_raw.split(",") if email.strip()]
                         if current_user not in parsed_members: parsed_members.append(current_user)
+                        
+                        if "group_creators" not in db: db["group_creators"] = {}
+                        if "group_memberships" not in db: db["group_memberships"] = {}
+                        if "messages" not in db: db["messages"] = {}
                         
                         db["group_creators"][new_group_title] = current_user
                         db["group_memberships"][new_group_title] = parsed_members
@@ -268,7 +271,7 @@ else:
                     if chk_group: st.session_state.dont_remind_group_delete = True
                     if target_group in db["group_memberships"]: del db["group_memberships"][target_group]
                     if target_group in db["group_creators"]: del db["group_creators"][target_group]
-                    if target_group in db["messages"]: del db["messages"][target_group]
+                    if "messages" in db and target_group in db["messages"]: del db["messages"][target_group]
                     save_global_db_to_cloud(db)
                     st.session_state.active_group = "Global Chat" if "Global Chat" in available_groups else None
                     st.session_state.pending_group_delete = None
@@ -281,6 +284,7 @@ else:
     # --- MAIN CHAT CONTAINER HOOK ---
     if st.session_state.active_group:
         st.markdown(f'<div class="pinned-header-yellow">🌐 {st.session_state.active_group}</div>', unsafe_allow_html=True)
+        if "messages" not in db: db["messages"] = {}
         if st.session_state.active_group not in db["messages"]:
             db["messages"][st.session_state.active_group] = []
         current_messages = db["messages"][st.session_state.active_group]

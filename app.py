@@ -128,6 +128,10 @@ st.markdown("""
     }
     
     .toggle-wrapper { text-align: center; margin-top: 5px; }
+    
+    /* Utility spacing for lists */
+    .member-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .member-name { color: #ffffff; font-size: 0.95rem; word-break: break-all; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -139,6 +143,14 @@ if "auth_page_mode" not in st.session_state:
     st.session_state.auth_page_mode = "Login"
 if "active_group" not in st.session_state:
     st.session_state.active_group = "Global Chat"
+if "dont_remind_user_delete" not in st.session_state:
+    st.session_state.dont_remind_user_delete = False
+if "dont_remind_group_delete" not in st.session_state:
+    st.session_state.dont_remind_group_delete = False
+if "pending_user_delete" not in st.session_state:
+    st.session_state.pending_user_delete = None
+if "pending_group_delete" not in st.session_state:
+    st.session_state.pending_group_delete = None
 
 # --- 3. PASSWORD-BASED AUTHENTICATION ---
 if st.session_state.logged_in_user is None:
@@ -185,10 +197,9 @@ else:
     current_user = st.session_state.logged_in_user
     db = load_global_db()
 
-    # --- 5. FIXED LIVE SYNC & REAL-TIME MULTI-USER ONLINE SYSTEM ---
+    # --- 5. HIGH-SPEED BACKGROUND AUTO-REFRESH ENGINE ---
     st_autorefresh(interval=1000, limit=None, key="chatterbox_live_refresh")
     
-    # Broadcast current user's local heart-beat timestamp right back to central disk storage 
     db["online_status"][current_user] = time.time()
     save_global_db(db)
 
@@ -220,13 +231,42 @@ else:
             st.session_state.active_group = "Global Chat"
             
         for group_name in available_groups:
+            group_creator = db.get("group_creators", {}).get(group_name, None)
             button_label = f"🌐 {group_name}" if group_name == "Global Chat" else f"🔒 {group_name}"
-            if group_name == st.session_state.active_group:
-                st.button(f"👉 {group_name}", key=f"chan_{group_name}", use_container_width=True, type="primary")
+            
+            # Creator gets a layout option to select or delete the group right here
+            if group_name != "Global Chat" and group_creator == current_user:
+                g_col1, g_col2 = st.columns([0.75, 0.25])
+                with g_col1:
+                    if group_name == st.session_state.active_group:
+                        st.button(f"👉 {group_name}", key=f"chan_{group_name}", use_container_width=True, type="primary")
+                    else:
+                        if st.button(button_label, key=f"chan_{group_name}", use_container_width=True):
+                            st.session_state.active_group = group_name
+                            st.rerun()
+                with g_col2:
+                    if st.button("🗑️", key=f"del_grp_{group_name}", help=f"Delete entire {group_name} group", use_container_width=True):
+                        if st.session_state.dont_remind_group_delete:
+                            # Instant delete
+                            if group_name in db.get("group_memberships", {}):
+                                del db["group_memberships"][group_name]
+                            if group_name in db.get("groups", {}):
+                                del db["groups"][group_name]
+                            if group_name in db.get("group_creators", {}):
+                                del db["group_creators"][group_name]
+                            save_global_db(db)
+                            st.session_state.active_group = "Global Chat"
+                            st.rerun()
+                        else:
+                            st.session_state.pending_group_delete = group_name
+                            st.session_state.pending_user_delete = None
             else:
-                if st.button(button_label, key=f"chan_{group_name}", use_container_width=True):
-                    st.session_state.active_group = group_name
-                    st.rerun()
+                if group_name == st.session_state.active_group:
+                    st.button(f"👉 {group_name}", key=f"chan_{group_name}", use_container_width=True, type="primary")
+                else:
+                    if st.button(button_label, key=f"chan_{group_name}", use_container_width=True):
+                        st.session_state.active_group = group_name
+                        st.rerun()
 
         # Popover Form Module to safely create custom chat channels
         with st.popover("➕ Create Custom Group", use_container_width=True):
@@ -271,58 +311,51 @@ else:
                     else:
                         st.error("Group name cannot be left blank.")
 
-        # --- NEW FEATURES: CREATOR-ONLY MEMBER MANAGEMENT PANEL ---
+        # --- SIMPLIFIED MEMBER MANAGEMENT PANEL (CREATOR-ONLY) ---
         current_group = st.session_state.active_group
         group_creator = db.get("group_creators", {}).get(current_group, None)
         
         if current_group != "Global Chat" and group_creator == current_user:
             st.markdown('<div class="sb-section-header">⚙️ Group Settings (Owner)</div>', unsafe_allow_html=True)
             
+            # Simple list style with direct inline trash layout triggers
             with st.popover("👥 Manage Group Members", use_container_width=True):
-                st.write(f"**Admin Tools for:** {current_group}")
+                st.write(f"**Members in {current_group}:**")
                 
-                # Add Members Sub-Section Form
-                with st.form("add_member_mini_form", clear_on_submit=True):
-                    add_email = st.text_input("Add Member by Email", placeholder="user@gmail.com").strip()
-                    submit_add = st.form_submit_button("Add to Group", use_container_width=True)
-                    if submit_add and add_email:
-                        if add_email not in db["group_memberships"][current_group]:
-                            db["group_memberships"][current_group].append(add_email)
+                # Add inline input quickly first
+                with st.form("quick_add_form", clear_on_submit=True):
+                    quick_email = st.text_input("Add Member by Email", placeholder="user@gmail.com").strip()
+                    if st.form_submit_button("Add", use_container_width=True):
+                        if quick_email and quick_email not in db["group_memberships"][current_group]:
+                            db["group_memberships"][current_group].append(quick_email)
                             db["groups"][current_group].append({
-                                "id": f"sys_{str(random.randint(100000, 999999))}",
-                                "sender": "System",
-                                "type": "text",
-                                "content": f"{add_email} was added to the group.",
-                                "timestamp": "",
-                                "deleted_for_users": []
+                                "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
+                                "content": f"{quick_email} was added to the group.", "timestamp": "", "deleted_for_users": []
                             })
                             save_global_db(db)
-                            st.toast(f"Added {add_email} successfully!")
                             st.rerun()
-                            
-                # Remove Members Sub-Section Selection Tool
-                current_members = db["group_memberships"][current_group]
-                removable_members = [m for m in current_members if m != current_user]
-                
-                if removable_members:
-                    with st.form("remove_member_mini_form"):
-                        member_to_remove = st.selectbox("Select Member to Remove", removable_members)
-                        submit_remove = st.form_submit_button("Kick Member", use_container_width=True)
-                        if submit_remove and member_to_remove:
-                            db["group_memberships"][current_group].remove(member_to_remove)
-                            db["groups"][current_group].append({
-                                "id": f"sys_{str(random.randint(100000, 999999))}",
-                                "sender": "System",
-                                "type": "text",
-                                "content": f"{member_to_remove} was removed from the group.",
-                                "timestamp": "",
-                                "deleted_for_users": []
-                            })
-                            save_global_db(db)
-                            st.toast(f"Kicked {member_to_remove} successfully!")
-                            st.rerun()
-                else:
-                    st.info("No other members inside this group channel yet.")
+
+                st.write("---")
+                # Listing rows out with buttons directly near their usernames
+                for member_email in db["group_memberships"].get(current_group, []):
+                    m_col1, m_col2 = st.columns([0.75, 0.25])
+                    with m_col1:
+                        st.markdown(f'<div class="member-name">👤 {member_email}</div>', unsafe_allow_html=True)
+                    with m_col2:
+                        if member_email != current_user:
+                            if st.button("🗑️", key=f"del_mem_{member_email}"):
+                                if st.session_state.dont_remind_user_delete:
+                                    # Instant delete execution path
+                                    db["group_memberships"][current_group].remove(member_email)
+                                    db["groups"][current_group].append({
+                                        "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
+                                        "content": f"{member_email} was removed from the group.", "timestamp": "", "deleted_for_users": []
+                                    })
+                                    save_global_db(db)
+                                    st.rerun()
+                                else:
+                                    st.session_state.pending_user_delete = member_email
+                                    st.session_state.pending_group_delete = None
 
         # --- DYNAMIC INTERNET ONLINE FEED ENGINE ---
         st.markdown('<div class="sb-section-header">👥 Online Status Feed</div>', unsafe_allow_html=True)
@@ -331,7 +364,6 @@ else:
         active_online_count = 0
         
         for user_email, last_active_time in db.get("online_status", {}).items():
-            # If the user has refreshed their page within the past 15 seconds, display them live
             if current_time_marker - last_active_time < 15:
                 display_clean_name = user_email.split("@")[0]
                 st.markdown(f'<div class="sb-online-user"><span class="status-dot"></span> {display_clean_name}</div>', unsafe_allow_html=True)
@@ -350,6 +382,56 @@ else:
         if st.button("🚪 Disconnect Session", use_container_width=True, type="secondary"):
             st.session_state.logged_in_user = None
             st.rerun()
+
+    # --- INLINE WARNING MODAL HOOKS ---
+    # User Warning Framework Interface Component
+    if st.session_state.pending_user_delete:
+        target_user = st.session_state.pending_user_delete
+        with st.warning(f"⚠️ Warning: Clicking this button will remove the user ({target_user}) from the group."):
+            chk_user = st.checkbox("Don't remind me again", key="chk_dont_rem_user")
+            w_c1, w_c2 = st.columns(2)
+            with w_c1:
+                if st.button("Confirm Removal", type="primary", use_container_width=True):
+                    if chk_user:
+                        st.session_state.dont_remind_user_delete = True
+                    if target_user in db["group_memberships"][st.session_state.active_group]:
+                        db["group_memberships"][st.session_state.active_group].remove(target_user)
+                        db["groups"][st.session_state.active_group].append({
+                            "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
+                            "content": f"{target_user} was removed from the group.", "timestamp": "", "deleted_for_users": []
+                        })
+                        save_global_db(db)
+                    st.session_state.pending_user_delete = None
+                    st.rerun()
+            with w_c2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.pending_user_delete = None
+                    st.rerun()
+
+    # Group Warning Framework Interface Component
+    if st.session_state.pending_group_delete:
+        target_group = st.session_state.pending_group_delete
+        with st.warning(f"⚠️ Warning: Clicking this button will remove the group ({target_group})."):
+            chk_group = st.checkbox("Don't remind me again", key="chk_dont_rem_grp")
+            wg_c1, wg_c2 = st.columns(2)
+            with wg_c1:
+                if st.button("Confirm Deletion", type="primary", use_container_width=True):
+                    if chk_group:
+                        st.session_state.dont_remind_group_delete = True
+                    if target_group in db.get("group_memberships", {}):
+                        del db["group_memberships"][target_group]
+                    if target_group in db.get("groups", {}):
+                        del db["groups"][target_group]
+                    if target_group in db.get("group_creators", {}):
+                        del db["group_creators"][target_group]
+                    save_global_db(db)
+                    st.session_state.active_group = "Global Chat"
+                    st.session_state.pending_group_delete = None
+                    st.rerun()
+            with wg_c2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.pending_group_delete = None
+                    st.rerun()
 
     # --- MAIN INTERFACE PANEL ---
     st.markdown(f'<div class="pinned-header-yellow">🌐 {st.session_state.active_group}</div>', unsafe_allow_html=True)

@@ -12,7 +12,10 @@ DB_FILE = "global_chat_db.json"
 def load_global_db():
     default_db = {
         "users": {"admin@chat.com": {"password": "adminpassword"}},
-        "groups": {"Global Chat": [{"id": "sys_start", "sender": "System", "type": "text", "content": "Welcome to ChatterBox!", "timestamp": "", "deleted_for_users": []}]}
+        "groups": {"Global Chat": [{"id": "sys_start", "sender": "System", "type": "text", "content": "Welcome to ChatterBox!", "timestamp": "", "deleted_for_users": []}]},
+        "group_memberships": {},
+        "group_creators": {},
+        "online_status": {}
     }
     
     if not os.path.exists(DB_FILE):
@@ -36,9 +39,13 @@ def load_global_db():
             
         if "users" not in data:
             data["users"] = default_db["users"]
+        if "group_memberships" not in data:
+            data["group_memberships"] = {}
+        if "group_creators" not in data:
+            data["group_creators"] = {}
+        if "online_status" not in data:
+            data["online_status"] = {}
             
-        with open(DB_FILE, "w") as f:
-            json.dump(data, f)
         return data
     except:
         return default_db
@@ -178,8 +185,12 @@ else:
     current_user = st.session_state.logged_in_user
     db = load_global_db()
 
-    # --- 5. HIGH-SPEED BACKGROUND AUTO-REFRESH ENGINE ---
+    # --- 5. FIXED LIVE SYNC & REAL-TIME MULTI-USER ONLINE SYSTEM ---
     st_autorefresh(interval=1000, limit=None, key="chatterbox_live_refresh")
+    
+    # Broadcast current user's local heart-beat timestamp right back to central disk storage 
+    db["online_status"][current_user] = time.time()
+    save_global_db(db)
 
     # --- LEFT SIDEBAR PANEL ---
     with st.sidebar:
@@ -196,24 +207,20 @@ else:
         st.markdown('<div class="sb-status">Logged in as</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sb-email">{current_user}</div>', unsafe_allow_html=True)
         
-        # --- NEW FEATURE: GROUP CREATION & MANAGEMENT SYSTEM ---
+        # --- GROUP CREATION & SELECTION MANAGEMENT SYSTEM ---
         st.markdown('<div class="sb-section-header">📁 Chat Channels / Groups</div>', unsafe_allow_html=True)
         
-        # Get list of groups current user has access to
         available_groups = ["Global Chat"]
         for group_name, info in db.get("group_memberships", {}).items():
-            if current_user in info or info == "public":
+            if current_user in info:
                 if group_name not in available_groups:
                     available_groups.append(group_name)
                     
-        # Update session state fallback if active group disappears or resets
         if st.session_state.active_group not in available_groups:
             st.session_state.active_group = "Global Chat"
             
-        # Channel Selection UI Button Matrix
         for group_name in available_groups:
             button_label = f"🌐 {group_name}" if group_name == "Global Chat" else f"🔒 {group_name}"
-            # Emphasize active selected channel
             if group_name == st.session_state.active_group:
                 st.button(f"👉 {group_name}", key=f"chan_{group_name}", use_container_width=True, type="primary")
             else:
@@ -221,7 +228,7 @@ else:
                     st.session_state.active_group = group_name
                     st.rerun()
 
-        # Custom Popover Form Module to safely isolate creation context out of structural trees
+        # Popover Form Module to safely create custom chat channels
         with st.popover("➕ Create Custom Group", use_container_width=True):
             with st.form("create_group_form_block", clear_on_submit=True):
                 new_group_title = st.text_input("Group Name", placeholder="e.g., Squad Goals").strip()
@@ -232,10 +239,10 @@ else:
                     if new_group_title:
                         if new_group_title == "Global Chat":
                             st.error("That channel label is reserved.")
+                        elif new_group_title in db.get("group_memberships", {}):
+                            st.error("This group name already exists.")
                         else:
-                            # Parse array, strip spacing, eliminate blank fields
                             parsed_members = [email.strip() for email in member_emails_raw.split(",") if email.strip()]
-                            # Creator always explicitly maintains structural root membership
                             if current_user not in parsed_members:
                                 parsed_members.append(current_user)
                                 
@@ -243,14 +250,16 @@ else:
                                 db["group_memberships"] = {}
                             if "groups" not in db:
                                 db["groups"] = {}
+                            if "group_creators" not in db:
+                                db["group_creators"] = {}
                                 
-                            # Initialize storage arrays 
+                            db["group_creators"][new_group_title] = current_user
                             db["group_memberships"][new_group_title] = parsed_members
                             db["groups"][new_group_title] = [{
                                 "id": f"sys_{str(random.randint(100000, 999999))}", 
                                 "sender": "System", 
                                 "type": "text", 
-                                "content": f"Group '{new_group_title}' generated by structural command.", 
+                                "content": f"Group '{new_group_title}' generated by creator.", 
                                 "timestamp": "",
                                 "deleted_for_users": []
                             }]
@@ -261,9 +270,75 @@ else:
                             st.rerun()
                     else:
                         st.error("Group name cannot be left blank.")
+
+        # --- NEW FEATURES: CREATOR-ONLY MEMBER MANAGEMENT PANEL ---
+        current_group = st.session_state.active_group
+        group_creator = db.get("group_creators", {}).get(current_group, None)
         
+        if current_group != "Global Chat" and group_creator == current_user:
+            st.markdown('<div class="sb-section-header">⚙️ Group Settings (Owner)</div>', unsafe_allow_html=True)
+            
+            with st.popover("👥 Manage Group Members", use_container_width=True):
+                st.write(f"**Admin Tools for:** {current_group}")
+                
+                # Add Members Sub-Section Form
+                with st.form("add_member_mini_form", clear_on_submit=True):
+                    add_email = st.text_input("Add Member by Email", placeholder="user@gmail.com").strip()
+                    submit_add = st.form_submit_button("Add to Group", use_container_width=True)
+                    if submit_add and add_email:
+                        if add_email not in db["group_memberships"][current_group]:
+                            db["group_memberships"][current_group].append(add_email)
+                            db["groups"][current_group].append({
+                                "id": f"sys_{str(random.randint(100000, 999999))}",
+                                "sender": "System",
+                                "type": "text",
+                                "content": f"{add_email} was added to the group.",
+                                "timestamp": "",
+                                "deleted_for_users": []
+                            })
+                            save_global_db(db)
+                            st.toast(f"Added {add_email} successfully!")
+                            st.rerun()
+                            
+                # Remove Members Sub-Section Selection Tool
+                current_members = db["group_memberships"][current_group]
+                removable_members = [m for m in current_members if m != current_user]
+                
+                if removable_members:
+                    with st.form("remove_member_mini_form"):
+                        member_to_remove = st.selectbox("Select Member to Remove", removable_members)
+                        submit_remove = st.form_submit_button("Kick Member", use_container_width=True)
+                        if submit_remove and member_to_remove:
+                            db["group_memberships"][current_group].remove(member_to_remove)
+                            db["groups"][current_group].append({
+                                "id": f"sys_{str(random.randint(100000, 999999))}",
+                                "sender": "System",
+                                "type": "text",
+                                "content": f"{member_to_remove} was removed from the group.",
+                                "timestamp": "",
+                                "deleted_for_users": []
+                            })
+                            save_global_db(db)
+                            st.toast(f"Kicked {member_to_remove} successfully!")
+                            st.rerun()
+                else:
+                    st.info("No other members inside this group channel yet.")
+
+        # --- DYNAMIC INTERNET ONLINE FEED ENGINE ---
         st.markdown('<div class="sb-section-header">👥 Online Status Feed</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sb-online-user"><span class="status-dot"></span> {current_user.split("@")[0]}</div>', unsafe_allow_html=True)
+        
+        current_time_marker = time.time()
+        active_online_count = 0
+        
+        for user_email, last_active_time in db.get("online_status", {}).items():
+            # If the user has refreshed their page within the past 15 seconds, display them live
+            if current_time_marker - last_active_time < 15:
+                display_clean_name = user_email.split("@")[0]
+                st.markdown(f'<div class="sb-online-user"><span class="status-dot"></span> {display_clean_name}</div>', unsafe_allow_html=True)
+                active_online_count += 1
+                
+        if active_online_count == 0:
+            st.markdown(f'<div class="sb-online-user"><span class="status-dot"></span> {current_user.split("@")[0]}</div>', unsafe_allow_html=True)
         
         st.write("---")
         if st.button("🗑️ Clear Chat History", use_container_width=True):
@@ -279,7 +354,6 @@ else:
     # --- MAIN INTERFACE PANEL ---
     st.markdown(f'<div class="pinned-header-yellow">🌐 {st.session_state.active_group}</div>', unsafe_allow_html=True)
     
-    # Secure runtime array mapping safely falling back to active group references
     if st.session_state.active_group not in db["groups"]:
         db["groups"][st.session_state.active_group] = []
         
@@ -310,7 +384,7 @@ else:
     if user_text:
         msg_id = str(random.randint(100000, 999999))
         
-        # Forces the application to compute India Standard Time (UTC + 5:30) on cloud environments
+        # India Standard Time offset math
         ist_timestamp = datetime.fromtimestamp(time.time() + 19800).strftime("%I:%M %p")
         
         db["groups"][st.session_state.active_group].append({

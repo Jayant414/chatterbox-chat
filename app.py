@@ -25,7 +25,7 @@ def load_global_db():
         with open(DB_FILE, "r") as f:
             data = json.load(f)
             
-        # CRUCIAL FIX: Automatically scans the database and purges old media entries or backup states
+        # Automatically scans the database and purges old media entries or backup states
         if "groups" in data and "Global Chat" in data["groups"]:
             cleaned_messages = []
             for msg in data["groups"]["Global Chat"]:
@@ -243,12 +243,16 @@ else:
     user_text = st.chat_input("Type a message or use Win + . for emojis...")
     if user_text:
         msg_id = str(random.randint(100000, 999999))
+        
+        # FIXED: Forces the application to compute India Standard Time (UTC + 5:30) on cloud environments
+        ist_timestamp = datetime.fromtimestamp(time.time() + 19800).strftime("%I:%M %p")
+        
         db["groups"][active_group].append({
             "id": msg_id, 
             "sender": current_user, 
             "type": "text", 
             "content": user_text, 
-            "timestamp": datetime.now().strftime("%I:%M %p"), 
+            "timestamp": ist_timestamp, 
             "deleted_for_users": []
         })
         save_global_db(db)

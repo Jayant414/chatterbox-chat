@@ -13,8 +13,8 @@ def load_global_db():
     default_db = {
         "users": {"admin@chat.com": {"password": "adminpassword"}},
         "groups": {"Global Chat": [{"id": "sys_start", "sender": "System", "type": "text", "content": "Welcome to ChatterBox!", "timestamp": "", "deleted_for_users": []}]},
-        "group_memberships": {"Global Chat": ["admin@chat.com"]},  # Initialized with admin; creator/admin manages access
-        "group_creators": {"Global Chat": "admin@chat.com"},        # Admin set as the default creator for Global Chat control
+        "group_memberships": {"Global Chat": ["admin@chat.com"]},  # Whitelist pool for Global Chat
+        "group_creators": {"Global Chat": "admin@chat.com"},        # Admin set as the absolute creator/owner of Global Chat
         "online_status": {}
     }
     
@@ -179,9 +179,6 @@ if st.session_state.logged_in_user is None:
                         st.error("Invalid credentials provided.")
                 else:
                     db["users"][user_email] = {"password": user_pass}
-                    # Automatically add signed-up user to Global Chat if Global Chat configuration is missing
-                    if "Global Chat" not in db["group_memberships"]:
-                        db["group_memberships"]["Global Chat"] = ["admin@chat.com"]
                     save_global_db(db)
                     st.session_state.logged_in_user = user_email
                     st.rerun()
@@ -228,7 +225,7 @@ else:
         # --- GROUP CREATION & SELECTION MANAGEMENT SYSTEM ---
         st.markdown('<div class="sb-section-header">📁 Chat Channels / Groups</div>', unsafe_allow_html=True)
         
-        # RESTRICTION FIX: Only show Global Chat if the user is explicitly added to its whitelist pool
+        # Only show Global Chat if the user is explicitly added to its whitelist pool
         available_groups = []
         if current_user in db.get("group_memberships", {}).get("Global Chat", []):
             available_groups.append("Global Chat")

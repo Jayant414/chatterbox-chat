@@ -13,8 +13,8 @@ def load_global_db():
     default_db = {
         "users": {"admin@chat.com": {"password": "adminpassword"}},
         "groups": {"Global Chat": [{"id": "sys_start", "sender": "System", "type": "text", "content": "Welcome to ChatterBox!", "timestamp": "", "deleted_for_users": []}]},
-        "group_memberships": {},
-        "group_creators": {},
+        "group_memberships": {"Global Chat": ["admin@chat.com"]},  # Initialized with admin; creator/admin manages access
+        "group_creators": {"Global Chat": "admin@chat.com"},        # Admin set as the default creator for Global Chat control
         "online_status": {}
     }
     
@@ -40,9 +40,13 @@ def load_global_db():
         if "users" not in data:
             data["users"] = default_db["users"]
         if "group_memberships" not in data:
-            data["group_memberships"] = {}
+            data["group_memberships"] = {"Global Chat": ["admin@chat.com"]}
+        if "Global Chat" not in data["group_memberships"]:
+            data["group_memberships"]["Global Chat"] = ["admin@chat.com"]
         if "group_creators" not in data:
-            data["group_creators"] = {}
+            data["group_creators"] = {"Global Chat": "admin@chat.com"}
+        if "Global Chat" not in data["group_creators"]:
+            data["group_creators"]["Global Chat"] = "admin@chat.com"
         if "online_status" not in data:
             data["online_status"] = {}
             
@@ -175,6 +179,9 @@ if st.session_state.logged_in_user is None:
                         st.error("Invalid credentials provided.")
                 else:
                     db["users"][user_email] = {"password": user_pass}
+                    # Automatically add signed-up user to Global Chat if Global Chat configuration is missing
+                    if "Global Chat" not in db["group_memberships"]:
+                        db["group_memberships"]["Global Chat"] = ["admin@chat.com"]
                     save_global_db(db)
                     st.session_state.logged_in_user = user_email
                     st.rerun()
@@ -221,20 +228,27 @@ else:
         # --- GROUP CREATION & SELECTION MANAGEMENT SYSTEM ---
         st.markdown('<div class="sb-section-header">📁 Chat Channels / Groups</div>', unsafe_allow_html=True)
         
-        available_groups = ["Global Chat"]
+        # RESTRICTION FIX: Only show Global Chat if the user is explicitly added to its whitelist pool
+        available_groups = []
+        if current_user in db.get("group_memberships", {}).get("Global Chat", []):
+            available_groups.append("Global Chat")
+            
         for group_name, info in db.get("group_memberships", {}).items():
-            if current_user in info:
+            if group_name != "Global Chat" and current_user in info:
                 if group_name not in available_groups:
                     available_groups.append(group_name)
                     
         if st.session_state.active_group not in available_groups:
-            st.session_state.active_group = "Global Chat"
+            if available_groups:
+                st.session_state.active_group = available_groups[0]
+            else:
+                st.session_state.active_group = None
             
         for group_name in available_groups:
             group_creator = db.get("group_creators", {}).get(group_name, None)
             button_label = f"🌐 {group_name}" if group_name == "Global Chat" else f"🔒 {group_name}"
             
-            # Creator gets a layout option to select or delete the group right here
+            # Creator gets a layout option to delete custom groups directly here
             if group_name != "Global Chat" and group_creator == current_user:
                 g_col1, g_col2 = st.columns([0.75, 0.25])
                 with g_col1:
@@ -247,7 +261,6 @@ else:
                 with g_col2:
                     if st.button("🗑️", key=f"del_grp_{group_name}", help=f"Delete entire {group_name} group", use_container_width=True):
                         if st.session_state.dont_remind_group_delete:
-                            # Instant delete
                             if group_name in db.get("group_memberships", {}):
                                 del db["group_memberships"][group_name]
                             if group_name in db.get("groups", {}):
@@ -255,7 +268,7 @@ else:
                             if group_name in db.get("group_creators", {}):
                                 del db["group_creators"][group_name]
                             save_global_db(db)
-                            st.session_state.active_group = "Global Chat"
+                            st.session_state.active_group = "Global Chat" if "Global Chat" in available_groups else None
                             st.rerun()
                         else:
                             st.session_state.pending_group_delete = group_name
@@ -311,22 +324,22 @@ else:
                     else:
                         st.error("Group name cannot be left blank.")
 
-        # --- SIMPLIFIED MEMBER MANAGEMENT PANEL (CREATOR-ONLY) ---
+        # --- SIMPLIFIED MEMBER MANAGEMENT PANEL (CREATOR/ADMIN-ONLY) ---
         current_group = st.session_state.active_group
         group_creator = db.get("group_creators", {}).get(current_group, None)
         
-        if current_group != "Global Chat" and group_creator == current_user:
+        if current_group and group_creator == current_user:
             st.markdown('<div class="sb-section-header">⚙️ Group Settings (Owner)</div>', unsafe_allow_html=True)
             
-            # Simple list style with direct inline trash layout triggers
             with st.popover("👥 Manage Group Members", use_container_width=True):
                 st.write(f"**Members in {current_group}:**")
                 
-                # Add inline input quickly first
                 with st.form("quick_add_form", clear_on_submit=True):
                     quick_email = st.text_input("Add Member by Email", placeholder="user@gmail.com").strip()
                     if st.form_submit_button("Add", use_container_width=True):
-                        if quick_email and quick_email not in db["group_memberships"][current_group]:
+                        if quick_email and quick_email not in db["group_memberships"].get(current_group, []):
+                            if current_group not in db["group_memberships"]:
+                                db["group_memberships"][current_group] = []
                             db["group_memberships"][current_group].append(quick_email)
                             db["groups"][current_group].append({
                                 "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
@@ -336,7 +349,6 @@ else:
                             st.rerun()
 
                 st.write("---")
-                # Listing rows out with buttons directly near their usernames
                 for member_email in db["group_memberships"].get(current_group, []):
                     m_col1, m_col2 = st.columns([0.75, 0.25])
                     with m_col1:
@@ -345,7 +357,6 @@ else:
                         if member_email != current_user:
                             if st.button("🗑️", key=f"del_mem_{member_email}"):
                                 if st.session_state.dont_remind_user_delete:
-                                    # Instant delete execution path
                                     db["group_memberships"][current_group].remove(member_email)
                                     db["groups"][current_group].append({
                                         "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
@@ -373,7 +384,7 @@ else:
             st.markdown(f'<div class="sb-online-user"><span class="status-dot"></span> {current_user.split("@")[0]}</div>', unsafe_allow_html=True)
         
         st.write("---")
-        if st.button("🗑️ Clear Chat History", use_container_width=True):
+        if st.session_state.active_group and st.button("🗑️ Clear Chat History", use_container_width=True):
             db["groups"][st.session_state.active_group] = [{"id": "sys_start", "sender": "System", "type": "text", "content": "Chat database reset.", "timestamp": "", "deleted_for_users": []}]
             save_global_db(db)
             st.rerun()
@@ -384,8 +395,7 @@ else:
             st.rerun()
 
     # --- INLINE WARNING MODAL HOOKS ---
-    # User Warning Framework Interface Component
-    if st.session_state.pending_user_delete:
+    if st.session_state.pending_user_delete and st.session_state.active_group:
         target_user = st.session_state.pending_user_delete
         with st.warning(f"⚠️ Warning: Clicking this button will remove the user ({target_user}) from the group."):
             chk_user = st.checkbox("Don't remind me again", key="chk_dont_rem_user")
@@ -394,7 +404,7 @@ else:
                 if st.button("Confirm Removal", type="primary", use_container_width=True):
                     if chk_user:
                         st.session_state.dont_remind_user_delete = True
-                    if target_user in db["group_memberships"][st.session_state.active_group]:
+                    if target_user in db["group_memberships"].get(st.session_state.active_group, []):
                         db["group_memberships"][st.session_state.active_group].remove(target_user)
                         db["groups"][st.session_state.active_group].append({
                             "id": f"sys_{str(random.randint(100000, 999999))}", "sender": "System", "type": "text",
@@ -408,7 +418,6 @@ else:
                     st.session_state.pending_user_delete = None
                     st.rerun()
 
-    # Group Warning Framework Interface Component
     if st.session_state.pending_group_delete:
         target_group = st.session_state.pending_group_delete
         with st.warning(f"⚠️ Warning: Clicking this button will remove the group ({target_group})."):
@@ -425,7 +434,7 @@ else:
                     if target_group in db.get("group_creators", {}):
                         del db["group_creators"][target_group]
                     save_global_db(db)
-                    st.session_state.active_group = "Global Chat"
+                    st.session_state.active_group = "Global Chat" if "Global Chat" in available_groups else None
                     st.session_state.pending_group_delete = None
                     st.rerun()
             with wg_c2:
@@ -434,48 +443,52 @@ else:
                     st.rerun()
 
     # --- MAIN INTERFACE PANEL ---
-    st.markdown(f'<div class="pinned-header-yellow">🌐 {st.session_state.active_group}</div>', unsafe_allow_html=True)
-    
-    if st.session_state.active_group not in db["groups"]:
-        db["groups"][st.session_state.active_group] = []
+    if st.session_state.active_group:
+        st.markdown(f'<div class="pinned-header-yellow">🌐 {st.session_state.active_group}</div>', unsafe_allow_html=True)
         
-    current_messages = db["groups"][st.session_state.active_group]
-    
-    chat_box = st.container(height=580)
-    with chat_box:
-        for msg in current_messages:
-            if "deleted_for_users" not in msg:
-                msg["deleted_for_users"] = []
-                
-            if current_user in msg["deleted_for_users"]:
-                continue
-                
-            if msg["sender"] == "System":
-                st.markdown(f"*{msg['content']}*")
-            else:
-                display_name = f"{msg['sender'].split('@')[0]} ({msg.get('timestamp', '')})"
-                
-                with st.chat_message(name="user", avatar="💬"):
-                    st.markdown(f"**@{display_name}**")
-                    if msg.get("type", "text") == "text":
-                        st.write(msg["content"])
+        if st.session_state.active_group not in db["groups"]:
+            db["groups"][st.session_state.active_group] = []
+            
+        current_messages = db["groups"][st.session_state.active_group]
+        
+        chat_box = st.container(height=580)
+        with chat_box:
+            for msg in current_messages:
+                if "deleted_for_users" not in msg:
+                    msg["deleted_for_users"] = []
+                    
+                if current_user in msg["deleted_for_users"]:
+                    continue
+                    
+                if msg["sender"] == "System":
+                    st.markdown(f"*{msg['content']}*")
+                else:
+                    display_name = f"{msg['sender'].split('@')[0]} ({msg.get('timestamp', '')})"
+                    
+                    with st.chat_message(name="user", avatar="💬"):
+                        st.markdown(f"**@{display_name}**")
+                        if msg.get("type", "text") == "text":
+                            st.write(msg["content"])
 
-    # --- TEXT INPUT CONTROLS ---
-    st.write("---")
-    user_text = st.chat_input("Type a message or use Win + . for emojis...")
-    if user_text:
-        msg_id = str(random.randint(100000, 999999))
-        
-        # India Standard Time offset math
-        ist_timestamp = datetime.fromtimestamp(time.time() + 19800).strftime("%I:%M %p")
-        
-        db["groups"][st.session_state.active_group].append({
-            "id": msg_id, 
-            "sender": current_user, 
-            "type": "text", 
-            "content": user_text, 
-            "timestamp": ist_timestamp, 
-            "deleted_for_users": []
-        })
-        save_global_db(db)
-        st.rerun()
+        # --- TEXT INPUT CONTROLS ---
+        st.write("---")
+        user_text = st.chat_input("Type a message or use Win + . for emojis...")
+        if user_text:
+            msg_id = str(random.randint(100000, 999999))
+            
+            # India Standard Time offset math
+            ist_timestamp = datetime.fromtimestamp(time.time() + 19800).strftime("%I:%M %p")
+            
+            db["groups"][st.session_state.active_group].append({
+                "id": msg_id, 
+                "sender": current_user, 
+                "type": "text", 
+                "content": user_text, 
+                "timestamp": ist_timestamp, 
+                "deleted_for_users": []
+            })
+            save_global_db(db)
+            st.rerun()
+    else:
+        st.markdown('<div class="pinned-header-yellow">🌐 No Channel Selected</div>', unsafe_allow_html=True)
+        st.info("You don't have access to any channels yet. Ask the admin (`admin@chat.com`) to add your Gmail to the Global Chat list!")
